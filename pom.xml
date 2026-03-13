@@ -124,6 +124,12 @@
             <artifactId>disruptor</artifactId>
             <version>3.4.2</version>
         </dependency>
+        <!-- Gson核心依赖 -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.10.1</version> <!-- 推荐最新稳定版 -->
+        </dependency>
         <!--        &lt;!&ndash; 分库分表 &ndash;&gt;-->
         <!--        <dependency>-->
         <!--            <groupId>org.apache.shardingsphere</groupId>-->

@@ -75,6 +75,30 @@ public class PictureController {
 	}
 
 	/**
+	 * 更新图片 管理员
+	 *
+	 * @param pictureUpdateRequest 修改图片请求
+	 * @return 修改结果
+	 */
+	@PostMapping("/update")
+	@RoleCheck(mustRole = UserConstant.ADMIN_ROLE)
+	public BaseResponse<PictureVO> updatePicture(@RequestBody PictureUpdateRequest pictureUpdateRequest, HttpServletRequest request) {
+		return ResultUtils.success(pictureService.updatePicture(pictureUpdateRequest, userService.getLoginUser(request)));
+	}
+
+	/**
+	 * 编辑图片
+	 *
+	 * @param pictureEditRequest 编辑图片请求
+	 * @return 编辑图片结果
+	 */
+	@PostMapping("/edit")
+	@SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_EDIT)
+	public BaseResponse<PictureVO> editPicture(@RequestBody PictureEditRequest pictureEditRequest, HttpServletRequest request) {
+		return ResultUtils.success(pictureService.editPicture(pictureEditRequest, userService.getLoginUser(request)));
+	}
+
+	/**
 	 * 获取图片信息
 	 *
 	 * @param id 图片id
@@ -94,30 +118,6 @@ public class PictureController {
 	@PostMapping("/list/page/vo")
 	public BaseResponse<Page<PictureVO>> listPictureVO(@RequestBody PictureQueryRequest pictureQueryRequest, HttpServletRequest request) {
 		return ResultUtils.success(pictureService.listPictureVO(pictureQueryRequest, userService.getLoginUser(request)));
-	}
-
-	/**
-	 * 编辑图片
-	 *
-	 * @param pictureEditRequest 编辑图片请求
-	 * @return 编辑图片结果
-	 */
-	@PostMapping("/edit")
-	@SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_EDIT)
-	public BaseResponse<PictureVO> editPicture(@RequestBody PictureEditRequest pictureEditRequest, HttpServletRequest request) {
-		return ResultUtils.success(pictureService.editPicture(pictureEditRequest, userService.getLoginUser(request)));
-	}
-
-	/**
-	 * 更新图片 管理员
-	 *
-	 * @param pictureUpdateRequest 修改图片请求
-	 * @return 修改结果
-	 */
-	@PostMapping("/update")
-	@RoleCheck(mustRole = UserConstant.ADMIN_ROLE)
-	public BaseResponse<PictureVO> updatePicture(@RequestBody PictureUpdateRequest pictureUpdateRequest, HttpServletRequest request) {
-		return ResultUtils.success(pictureService.updatePicture(pictureUpdateRequest, userService.getLoginUser(request)));
 	}
 
 	/**

@@ -20,7 +20,6 @@ public class CosManager {
 
 	@Resource
 	private CosClientConfig cosClientConfig;
-
 	@Resource
 	private COSClient cosClient;
 

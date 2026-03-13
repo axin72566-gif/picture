@@ -97,7 +97,7 @@ public abstract class PictureUploadTemplate {
 		uploadPictureResult.setPicSize(FileUtil.size(file));
 		uploadPictureResult.setPicWidth(imageInfo.getWidth());
 		uploadPictureResult.setPicHeight(imageInfo.getHeight());
-		uploadPictureResult.setPicScale(imageInfo.getWidth() / imageInfo.getHeight() * 1.0);
+		uploadPictureResult.setPicScale(imageInfo.getWidth() / (imageInfo.getHeight() * 1.0));
 		uploadPictureResult.setPicFormat(imageInfo.getFormat());
 		return uploadPictureResult;
 	}

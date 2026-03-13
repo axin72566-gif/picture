@@ -6,6 +6,8 @@ import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.axin.picturebackend.common.DeleteRequest;
+import com.axin.picturebackend.constant.PictureConstant;
+import com.axin.picturebackend.constant.RedisConstant;
 import com.axin.picturebackend.exception.BusinessException;
 import com.axin.picturebackend.exception.ErrorCode;
 import com.axin.picturebackend.exception.ThrowUtils;
@@ -24,6 +26,7 @@ import com.axin.picturebackend.model.vo.PictureVO;
 import com.axin.picturebackend.service.SpaceService;
 import com.axin.picturebackend.service.SpaceUserService;
 import com.axin.picturebackend.service.UserService;
+import com.axin.picturebackend.utils.GsonUtils;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.StringUtils;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -53,6 +56,7 @@ import java.lang.reflect.Type;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -83,12 +87,17 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
 	@Resource
 	private SpaceUserService spaceUserService;
 	// 构建本地缓存
-	private final Cache<String, String> LOCAL_CACHE =
+	private final Cache<String, String> LOCAL_PICTURE_CACHE =
 			Caffeine.newBuilder().initialCapacity(1024)
 					.maximumSize(10000L)
 					// 缓存 5 分钟移除
 					.expireAfterWrite(5L, TimeUnit.MINUTES)
 					.build();
+	// 基础过期时间：1小时（3600秒）
+	private static final int BASE_EXPIRE_SECONDS = 3600;
+	// 随机过期偏移：0~600秒（10分钟），防缓存雪崩
+	private static final int RANDOM_EXPIRE_RANGE = 600;
+	private static final Random RANDOM = new Random();
 
 	/**
 	 * 上传图片
@@ -148,10 +157,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
 		String prefix;
 		if (spaceId != null) {
 			// 上传到空间
-			prefix = String.format("space/%s", spaceId);
+			prefix = String.format(PictureConstant.SPACE_PICTURE, spaceId);
 		} else {
 			// 公共图库
-			prefix = String.format("public/picture/%s", loginUser.getId());
+			prefix = String.format(PictureConstant.PUBLIC_PICTURE, loginUser.getId());
 		}
 		// 判断输入源 选择上传方式 上传文件
 		UploadPictureResult uploadPictureResult = null;
@@ -396,6 +405,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
 			if (!update) {
 				throw new BusinessException(ErrorCode.SYSTEM_ERROR, "更新空间额度失败");
 			}
+			// 删除本地缓存
+			LOCAL_PICTURE_CACHE.invalidate(RedisConstant.PICTURE + id);
+			// 删除redis
+			stringRedisTemplate.delete(RedisConstant.PICTURE + id);
 			return true;
 		});
 		return true;
@@ -429,6 +442,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
 		if (!b) {
 			throw new BusinessException(ErrorCode.SYSTEM_ERROR, "修改图片失败");
 		}
+		// 删除本地缓存
+		LOCAL_PICTURE_CACHE.invalidate(RedisConstant.PICTURE + pictureUpdateRequest.getId());
+		// 删除redis
+		stringRedisTemplate.delete(RedisConstant.PICTURE + pictureUpdateRequest.getId());
 		return getPictureVO(picture);
 	}
 
@@ -446,7 +463,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
 		// 判断图片是否存在
 		Picture picture = this.getById(id);
 		if (picture == null) {
-			throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
+			return null;
 		}
 		// 判断图片是否属于某一个空间
 		Long spaceId = picture.getSpaceId();
@@ -487,16 +504,59 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
 	 */
 	@Override
 	public PictureVO getPictureVOById(Long id, User loginUser) {
+		if (id == null || id <= 0) {
+			throw new BusinessException(ErrorCode.PARAMS_ERROR);
+		}
+		// 查本地缓存
+		String localCacheKey = RedisConstant.PICTURE + id;
+		String localPictureCacheStr = LOCAL_PICTURE_CACHE.getIfPresent(localCacheKey);
+		if (localPictureCacheStr != null) {
+			if (localPictureCacheStr.isEmpty()) {
+				return null;
+			}
+			PictureVO pictureVO = GsonUtils.fromJson(localPictureCacheStr, PictureVO.class);
+			Long spaceId = pictureVO.getSpaceId();
+			Space space = spaceService.getById(spaceId);
+			pictureVO.setPermissionList(spaceUserAuthManager.getPermissionList(space, loginUser));
+			return pictureVO;
+		}
+		// 查redis缓存
+		String cacheKey = RedisConstant.PICTURE + id;
+		String pictureVOStr = stringRedisTemplate.opsForValue().get(cacheKey);
+		// 命中缓存
+		if (pictureVOStr != null) {
+			// 如果是空字符串，则返回null
+			if (pictureVOStr.isEmpty()) {
+				return null;
+			}
+			// 写到本地缓存
+			LOCAL_PICTURE_CACHE.put(localCacheKey, pictureVOStr);
+			// 转换为对象
+			PictureVO pictureVO = GsonUtils.fromJson(pictureVOStr, PictureVO.class);
+			// 获取权限列表
+			Long spaceId = pictureVO.getSpaceId();
+			Space space = spaceService.getById(spaceId);
+			pictureVO.setPermissionList(spaceUserAuthManager.getPermissionList(space, loginUser));
+			return pictureVO;
+		}
+		// 缓存为空，从数据库查询
 		Picture picture = getPictureById(id, loginUser);
-		PictureVO pictureVO = getPictureVO(picture);
+		// 数据库也没有，返回null，缓存空字符串
+		if (picture == null) {
+			LOCAL_PICTURE_CACHE.put(localCacheKey, "");
+			stringRedisTemplate.opsForValue().set(cacheKey, "", BASE_EXPIRE_SECONDS, TimeUnit.SECONDS);
+			return null;
+		}
+		PictureVO pictureVODB = getPictureVO(picture);
+		// 写缓存
+		int expireSeconds = BASE_EXPIRE_SECONDS + RANDOM.nextInt(RANDOM_EXPIRE_RANGE);
+		LOCAL_PICTURE_CACHE.put(localCacheKey, GsonUtils.toJson(pictureVODB));
+		stringRedisTemplate.opsForValue().set(cacheKey, GsonUtils.toJson(pictureVODB), expireSeconds, TimeUnit.SECONDS);
 		// 获取权限列表
 		Long spaceId = picture.getSpaceId();
 		Space space = spaceService.getById(spaceId);
-		if (space == null) {
-			throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "空间不存在");
-		}
-		pictureVO.setPermissionList(spaceUserAuthManager.getPermissionList(space, loginUser));
-		return pictureVO;
+		pictureVODB.setPermissionList(spaceUserAuthManager.getPermissionList(space, loginUser));
+		return pictureVODB;
 	}
 
 	/**
@@ -593,6 +653,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
 		if (!b) {
 			throw new BusinessException(ErrorCode.SYSTEM_ERROR, "修改图片失败");
 		}
+		// 删除本地缓存
+		LOCAL_PICTURE_CACHE.invalidate(RedisConstant.PICTURE + id);
+		// 删除redis
+		stringRedisTemplate.delete(RedisConstant.PICTURE + id);
 		return getPictureVO(this.getById(id));
 	}
 
