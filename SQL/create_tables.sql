@@ -103,3 +103,59 @@ create table if not exists space_user
     INDEX idx_spaceId (spaceId),                    -- 提升按空间查询的性能
     INDEX idx_userId (userId)                       -- 提升按用户查询的性能
 ) comment '空间用户关联' collate = utf8mb4_unicode_ci;
+
+-- 添加新列
+alter table picture
+    add viewCount int default 0 not null comment '访问次数';
+
+-- 添加点赞数列
+ALTER TABLE picture
+    ADD COLUMN likeCount bigint DEFAULT 0 NOT NULL COMMENT '点赞数';
+
+-- 图片点赞关联表
+CREATE TABLE IF NOT EXISTS `picture_like`
+(
+    `id`         bigint UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `userId`     bigint          NOT NULL COMMENT '点赞用户ID',
+    `pictureId`  bigint          NOT NULL COMMENT '被点赞图片ID',
+    `createTime` datetime        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '点赞时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_userId_pictureId` (`userId`, `pictureId`),
+    INDEX `idx_pictureId` (`pictureId`),
+    INDEX `idx_userId` (`userId`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4 COMMENT '图片点赞关联表';
+
+CREATE TABLE `sys_notice` (
+                              `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID，自增',
+                              `userId` bigint NOT NULL COMMENT '接收通知的用户ID（系统公告填0表示全体用户）',
+                              `title` varchar(100) DEFAULT '' COMMENT '通知标题（系统公告必填，互动通知可选）',
+                              `content` varchar(500) NOT NULL COMMENT '通知内容（如：XXX点赞了你的文章）',
+                              `relatedId` bigint DEFAULT 0 COMMENT '关联业务ID（如点赞的文章ID、评论ID）',
+                              `isRead` tinyint NOT NULL DEFAULT 0 COMMENT '阅读状态：0-未读 1-已读',
+                              `readTime` datetime DEFAULT NULL COMMENT '阅读时间（标记已读时更新）',
+                              `createTime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '通知创建时间',
+                              `updateTime` datetime DEFAULT NULL COMMENT '删除时间（软删除时更新）',
+                              `isDeleted` tinyint NOT NULL DEFAULT 0 COMMENT '删除状态：0-正常 1-已删除（软删除）',
+                              PRIMARY KEY (`id`),
+    -- 核心索引：优化「按用户查未读通知、按时间排序」的高频查询
+                              KEY `idx_user_read_time` (`userId`,`isRead`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户通知主表';
+
+-- 图片评论表
+CREATE TABLE IF NOT EXISTS `comment`
+(
+    `id`         bigint       NOT NULL COMMENT '评论ID（雪花算法）',
+    `pictureId`  bigint       NOT NULL COMMENT '所属图片ID',
+    `userId`     bigint       NOT NULL COMMENT '评论者用户ID',
+    `parentId`   bigint       NOT NULL DEFAULT 0 COMMENT '父评论ID，0表示一级评论',
+    `content`    varchar(1000) NOT NULL COMMENT '评论内容',
+    `createTime` datetime     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updateTime` datetime     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    `isDelete`   tinyint      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0-正常 1-已删除',
+    PRIMARY KEY (`id`),
+    INDEX `idx_pictureId` (`pictureId`),
+    INDEX `idx_userId` (`userId`),
+    INDEX `idx_parentId` (`parentId`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4 COMMENT '图片评论表';

@@ -123,6 +123,16 @@ public class Picture implements Serializable {
     private Date updateTime;
 
     /**
+     * 浏览次数
+     */
+    private Long viewCount;
+
+    /**
+     * 点赞数
+     */
+    private Long likeCount;
+
+    /**
      * 是否删除
      */
     @TableLogic

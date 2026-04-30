@@ -15,7 +15,6 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
 	@Resource
 	private PictureEditHandler pictureEditHandler;
-
 	@Resource
 	private WsHandshakeInterceptor wsHandshakeInterceptor;
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.axin.picturebackend.mapper.PictureLikeMapper">
+
+    <!-- 批量查询用户对图片列表的点赞状态，返回已点赞的图片ID列表 -->
+    <select id="selectLikedPictureIds" resultType="java.lang.Long">
+        SELECT pictureId
+        FROM picture_like
+        WHERE userId = #{userId}
+          AND pictureId IN
+        <foreach collection="pictureIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+</mapper>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.axin.picturebackend.mapper.SysNoticeMapper">
+
+    <resultMap id="BaseResultMap" type="com.axin.picturebackend.model.entity.SysNotice">
+            <id property="id" column="id" />
+            <result property="userId" column="userId" />
+            <result property="title" column="title" />
+            <result property="content" column="content" />
+            <result property="relatedId" column="relatedId" />
+            <result property="isRead" column="isRead" />
+            <result property="readTime" column="readTime" />
+            <result property="createTime" column="createTime" />
+            <result property="updateTime" column="updateTime" />
+            <result property="isDeleted" column="isDeleted" />
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,userId,title,content,relatedId,isRead,
+        readTime,createTime,updateTime,isDeleted
+    </sql>
+</mapper>

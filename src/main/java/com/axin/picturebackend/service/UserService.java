@@ -130,4 +130,11 @@ public interface UserService extends IService<User> {
 	 * @return 是否为管理员
 	 */
 	boolean isAdmin(User user);
+
+	/**
+	 * 修改用户信息
+	 * @param userEditRequest 修改用户信息请求
+	 * @return 修改结果
+	 */
+	Boolean editUser(UserEditRequest userEditRequest);
 }
