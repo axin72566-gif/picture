@@ -23,8 +23,7 @@ import org.springframework.web.multipart.MultipartFile;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 /**
  * 图片控制器
@@ -48,7 +47,7 @@ public class PictureController {
     @Resource
     private PictureLikeService pictureLikeService;
 
-    // ==================== 上传 ====================
+    // ==================== 上传 下载 ====================
 
     /**
      * 上传图片（文件方式）
@@ -86,6 +85,16 @@ public class PictureController {
         User loginUser = userService.getLoginUser(request);
         int uploadCount = pictureService.uploadPictureByBatch(pictureUploadByBatchRequest, loginUser);
         return ResultUtils.success(uploadCount);
+    }
+
+    /**
+     * 下载图片
+     */
+    @GetMapping("/download")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_DOWNLOAD)
+    public void downloadPicture(@RequestParam Long id, HttpServletRequest request, HttpServletResponse response) {
+        User loginUser = userService.getLoginUser(request);
+        pictureService.downloadPicture(id, loginUser, response);
     }
 
     // ==================== 删除 / 编辑 / 更新 ====================
@@ -195,16 +204,6 @@ public class PictureController {
         return ResultUtils.success(pictureService.doPictureReview(pictureReviewRequest, loginUser));
     }
 
-    /**
-     * 下载图片
-     */
-    @GetMapping("/download")
-    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_DOWNLOAD)
-    public void downloadPicture(@RequestParam Long id, HttpServletRequest request, HttpServletResponse response) {
-        User loginUser = userService.getLoginUser(request);
-        pictureService.downloadPicture(id, loginUser, response);
-    }
-
     // ==================== 点赞 ====================
 
     /**
@@ -215,8 +214,8 @@ public class PictureController {
                                         HttpServletRequest request) {
         ThrowUtils.throwIf(pictureLikeRequest == null || pictureLikeRequest.getPictureId() == null,
                 ErrorCode.PARAMS_ERROR, "参数错误");
-        User loginUser = userService.getLoginUser(request);
-        boolean result = pictureLikeService.doLike(pictureLikeRequest.getPictureId(), loginUser);
+        User loginUser=userService.getLoginUser(request);
+        boolean result=pictureLikeService.doLike(pictureLikeRequest.getPictureId(), loginUser);
         return ResultUtils.success(result);
     }
 }

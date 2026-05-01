@@ -159,3 +159,17 @@ CREATE TABLE IF NOT EXISTS `comment`
     INDEX `idx_parentId` (`parentId`)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT '图片评论表';
+
+-- 用户关注关联表
+CREATE TABLE IF NOT EXISTS `user_follow`
+(
+    `id`         bigint UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `userId`     bigint          NOT NULL COMMENT '发起关注的用户ID',
+    `followUserId` bigint        NOT NULL COMMENT '被关注的用户ID',
+    `createTime` datetime        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '关注时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_userId_followUserId` (`userId`, `followUserId`),
+    INDEX `idx_userId` (`userId`),
+    INDEX `idx_followUserId` (`followUserId`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4 COMMENT '用户关注关联表';
