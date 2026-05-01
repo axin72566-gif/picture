@@ -1,7 +1,7 @@
 package com.axin.picturebackend.manager.pictureClear;
 
-import com.axin.picturebackend.constant.PictureConstant;
 import com.axin.picturebackend.manager.CosManager;
+import com.axin.picturebackend.config.CosClientConfig;
 import com.axin.picturebackend.model.Enum.PictureReviewStatusEnum;
 import com.axin.picturebackend.model.Enum.SpaceTypeEnum;
 import com.axin.picturebackend.model.entity.Picture;
@@ -12,12 +12,18 @@ import com.axin.picturebackend.service.SpaceService;
 import com.axin.picturebackend.service.SpaceUserService;
 import com.axin.picturebackend.service.SysNoticeService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.annotation.Resource;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
@@ -53,7 +59,16 @@ public class TeamPictureClearManager {
     private CosManager cosManager;
 
     @Resource
+    private CosClientConfig cosClientConfig;
+
+    @Resource
     private SysNoticeService sysNoticeService;
+
+    @Resource
+    private TransactionTemplate transactionTemplate;
+
+    @Resource(name = "backgroundExecutor")
+    private Executor backgroundExecutor;
 
     // ==================== 定时任务 ====================
 
@@ -120,45 +135,59 @@ public class TeamPictureClearManager {
     }
 
     /**
-     * 执行图片清理：删除记录 → 更新空间额度 → 删除 COS 文件 → 通知团队成员
+     * 执行图片清理：分批处理避免内存溢出
      *
      * @param queryWrapper 查询条件
      * @param label        清理类型描述（用于日志）
      */
     private void clearPictures(QueryWrapper<Picture> queryWrapper, String label) {
-        List<Picture> pictureList = pictureService.list(queryWrapper);
-        if (pictureList.isEmpty()) {
-            log.info("[团队空间清理-{}] 无符合条件的图片，跳过", label);
-            return;
+        long pageSize = 500;
+        int totalDeleted = 0;
+
+        while (true) {
+            Page<Picture> page = pictureService.page(new Page<>(1, pageSize), queryWrapper);
+            List<Picture> pictureList = page.getRecords();
+            if (CollectionUtils.isEmpty(pictureList)) {
+                break;
+            }
+
+            // 按空间分组，批量更新空间额度
+            pictureList.stream()
+                    .collect(Collectors.groupingBy(Picture::getSpaceId))
+                    .forEach((spaceId, pics) -> {
+                        Space space = spaceService.getById(spaceId);
+                        if (space == null) {
+                            return;
+                        }
+                        List<Long> ids = pics.stream().map(Picture::getId).collect(Collectors.toList());
+                        long deletedSize = pics.stream()
+                                .mapToLong(p -> p.getPicSize() == null ? 0 : p.getPicSize())
+                                .sum();
+
+                        Boolean success = transactionTemplate.execute(status -> {
+                            boolean removed = pictureService.removeByIds(ids);
+                            if (!removed) {
+                                return false;
+                            }
+                            space.setTotalCount(space.getTotalCount() - pics.size());
+                            space.setTotalSize(space.getTotalSize() - deletedSize);
+                            return spaceService.updateById(space);
+                        });
+
+                        if (Boolean.TRUE.equals(success)) {
+                            // 异步清理 COS 文件并发送通知
+                            asyncCleanCosAndNotify(space, pics, "团队空间清理通知", buildNoticeContent(pics, label));
+                        } else {
+                            log.warn("[团队空间清理-{}] 空间 {} 批次删除失败", label, spaceId);
+                        }
+                    });
+
+            totalDeleted += pictureList.size();
+            if (pictureList.size() < pageSize) {
+                break;
+            }
         }
-        List<Long> ids = pictureList.stream().map(Picture::getId).collect(Collectors.toList());
-        if (!pictureService.removeByIds(ids)) {
-            log.warn("[团队空间清理-{}] 删除图片记录失败", label);
-            return;
-        }
-        // 按空间分组，批量更新空间额度、删除 COS 文件、发送通知
-        pictureList.stream()
-                .collect(Collectors.groupingBy(Picture::getSpaceId))
-                .forEach((spaceId, pics) -> {
-                    Space space = spaceService.getById(spaceId);
-                    if (space == null) {
-                        return;
-                    }
-                    long deletedSize = pics.stream()
-                            .mapToLong(p -> p.getPicSize() == null ? 0 : p.getPicSize())
-                            .sum();
-                    space.setTotalCount(space.getTotalCount() - pics.size());
-                    space.setTotalSize(space.getTotalSize() - deletedSize);
-                    spaceService.updateById(space);
-                    // 删除 COS 文件
-                    pics.forEach(p ->
-                            cosManager.deleteObject(String.format(PictureConstant.SPACE_PICTURE, spaceId))
-                    );
-                    // 通知空间所有者及团队成员
-                    String content = buildNoticeContent(pics, label);
-                    sendTeamNotice(space, content);
-                });
-        log.info("[团队空间清理-{}] 完成，共清理 {} 张图片", label, pictureList.size());
+        log.info("[团队空间清理-{}] 完成，共清理 {} 张图片", label, totalDeleted);
     }
 
     /**
@@ -172,44 +201,88 @@ public class TeamPictureClearManager {
         if (toDelete <= 0) {
             return;
         }
-        List<Picture> oldestPictures = pictureService.list(
-                new QueryWrapper<Picture>()
-                        .eq("spaceId", space.getId())
-                        .orderByAsc("createTime")
-                        .last("LIMIT " + toDelete)
-        );
-        if (oldestPictures.isEmpty()) {
-            return;
+
+        long remainingToDelete = toDelete;
+        long batchSize = 500;
+        int totalDeleted = 0;
+
+        while (remainingToDelete > 0) {
+            long currentBatchSize = Math.min(remainingToDelete, batchSize);
+            List<Picture> oldestPictures = pictureService.list(
+                    new QueryWrapper<Picture>()
+                            .eq("spaceId", space.getId())
+                            .orderByAsc("createTime")
+                            .last("LIMIT " + currentBatchSize)
+            );
+
+            if (CollectionUtils.isEmpty(oldestPictures)) {
+                break;
+            }
+
+            List<Long> ids = oldestPictures.stream().map(Picture::getId).collect(Collectors.toList());
+            long deletedSize = oldestPictures.stream()
+                    .mapToLong(p -> p.getPicSize() == null ? 0 : p.getPicSize())
+                    .sum();
+
+            Boolean success = transactionTemplate.execute(status -> {
+                boolean removed = pictureService.removeByIds(ids);
+                if (!removed) {
+                    return false;
+                }
+                // 更新空间额度
+                space.setTotalCount(space.getTotalCount() - oldestPictures.size());
+                space.setTotalSize(space.getTotalSize() - deletedSize);
+                return spaceService.updateById(space);
+            });
+
+            if (Boolean.TRUE.equals(success)) {
+                totalDeleted += oldestPictures.size();
+                remainingToDelete -= oldestPictures.size();
+                // 异步清理 COS 文件并发送通知
+                asyncCleanCosAndNotify(space, oldestPictures, "团队空间容量清理", buildNoticeContent(oldestPictures, "超容量淘汰"));
+            } else {
+                log.warn("[团队空间清理] 空间 {} 批次淘汰失败", space.getId());
+                break;
+            }
         }
-        List<Long> ids = oldestPictures.stream().map(Picture::getId).collect(Collectors.toList());
-        if (!pictureService.removeByIds(ids)) {
-            log.warn("[团队空间清理] 空间 {} 超容量淘汰失败", space.getId());
-            return;
-        }
-        // 更新空间额度
-        long deletedSize = oldestPictures.stream()
-                .mapToLong(p -> p.getPicSize() == null ? 0 : p.getPicSize())
-                .sum();
-        space.setTotalCount(space.getTotalCount() - oldestPictures.size());
-        space.setTotalSize(space.getTotalSize() - deletedSize);
-        spaceService.updateById(space);
-        // 删除 COS 文件
-        oldestPictures.forEach(p ->
-                cosManager.deleteObject(String.format(PictureConstant.SPACE_PICTURE, space.getId()))
-        );
-        // 通知团队所有成员
-        String content = buildNoticeContent(oldestPictures, "超容量淘汰");
-        sendTeamNotice(space, content);
-        log.info("[团队空间清理] 空间 {} 淘汰了 {} 张旧图片", space.getId(), oldestPictures.size());
+        log.info("[团队空间清理] 空间 {} 完成超容量淘汰，共清理 {} 张旧图片", space.getId(), totalDeleted);
+    }
+
+    /**
+     * 异步清理 COS 文件并发送通知
+     */
+    private void asyncCleanCosAndNotify(Space space, List<Picture> pics, String title, String content) {
+        CompletableFuture.runAsync(() -> {
+            // 1. 清理 COS 文件
+            for (Picture picture : pics) {
+                try {
+                    String url = picture.getUrl();
+                    if (StringUtils.isNotBlank(url)) {
+                        String key = url.replace(cosClientConfig.getHost() + "/", "");
+                        cosManager.deleteObject(key);
+                    }
+                    String thumbnailUrl = picture.getThumbnailUrl();
+                    if (StringUtils.isNotBlank(thumbnailUrl)) {
+                        String thumbKey = thumbnailUrl.replace(cosClientConfig.getHost() + "/", "");
+                        cosManager.deleteObject(thumbKey);
+                    }
+                } catch (Exception e) {
+                    log.error("[团队空间清理] 清理 COS 文件失败, pictureId={}, error={}", picture.getId(), e.getMessage());
+                }
+            }
+            // 2. 通知团队所有成员
+            sendTeamNotice(space, title, content);
+        }, backgroundExecutor);
     }
 
     /**
      * 发送清理通知给空间所有者及全体团队成员
      *
      * @param space   空间对象
+     * @param title   通知标题
      * @param content 通知内容
      */
-    private void sendTeamNotice(Space space, String content) {
+    private void sendTeamNotice(Space space, String title, String content) {
         try {
             // 收集所有成员 ID
             List<Long> memberIds = spaceUserService.list(
@@ -219,9 +292,9 @@ public class TeamPictureClearManager {
             if (!memberIds.contains(space.getUserId())) {
                 memberIds.add(space.getUserId());
             }
-            sysNoticeService.sendBatchNotice(memberIds, "团队空间清理通知", content, null);
+            sysNoticeService.sendBatchNotice(memberIds, title, content, null);
         } catch (Exception e) {
-            log.warn("[团队空间清理] 发送通知失败，spaceId={}, error={}", space.getId(), e.getMessage());
+            log.warn("[团队空间清理] 发送通知失败, spaceId={}, error={}", space.getId(), e.getMessage());
         }
     }
 

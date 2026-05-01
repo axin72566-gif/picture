@@ -1,6 +1,15 @@
 package com.axin.picturebackend.service.impl;
 
 import cn.hutool.core.collection.CollectionUtil;
+import cn.hutool.http.HttpUtil;
+import com.axin.picturebackend.config.CosClientConfig;
+import com.axin.picturebackend.manager.auth.model.SpaceUserPermissionConstant;
+import javax.servlet.http.HttpServletResponse;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URL;
+import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
 import cn.hutool.core.util.ObjUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
@@ -84,6 +93,8 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
     private SpaceUserService spaceUserService;
     @Resource
     private CosManager cosManager;
+    @Resource
+    private CosClientConfig cosClientConfig;
     @Lazy
     @Resource
     private PictureLikeService pictureLikeService;
@@ -278,10 +289,15 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
             ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR, "图片不存在");
             ThrowUtils.throwIf(!this.removeById(id), ErrorCode.SYSTEM_ERROR, "删除图片失败");
             // 清理 COS 文件
-            if (picture.getSpaceId() != null) {
-                cosManager.deleteObject(PictureConstant.SPACE_PICTURE + picture.getSpaceId());
-            } else {
-                cosManager.deleteObject(PictureConstant.PUBLIC_PICTURE + picture.getUserId());
+            String url = picture.getUrl();
+            if (StringUtils.isNotBlank(url)) {
+                String key = url.replace(cosClientConfig.getHost() + "/", "");
+                cosManager.deleteObject(key);
+            }
+            String thumbnailUrl = picture.getThumbnailUrl();
+            if (StringUtils.isNotBlank(thumbnailUrl)) {
+                String thumbKey = thumbnailUrl.replace(cosClientConfig.getHost() + "/", "");
+                cosManager.deleteObject(thumbKey);
             }
             // 更新空间额度（仅空间图片）
             Long spaceId = picture.getSpaceId();
@@ -446,6 +462,14 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         }
         pictureVO.setUser(userService.getUserVO(user));
         pictureVO.setLikeCount(pictureLikeService.getLikeCount(picture.getId(), picture.getLikeCount()));
+        // 填充空间类型
+        Long spaceId = picture.getSpaceId();
+        if (spaceId != null) {
+            Space space = spaceService.getById(spaceId);
+            if (space != null) {
+                pictureVO.setSpaceType(space.getSpaceType());
+            }
+        }
         return pictureVO;
     }
 
@@ -465,6 +489,13 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         List<Long> userIdList = pictures.stream().map(Picture::getUserId).collect(Collectors.toList());
         Map<Long, List<User>> userIdUserListMap = userService.listByIds(userIdList)
                 .stream().collect(Collectors.groupingBy(User::getId));
+        // 批量关联空间信息
+        Set<Long> spaceIdSet = pictures.stream().map(Picture::getSpaceId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, Space> spaceMap = new HashMap<>();
+        if (!spaceIdSet.isEmpty()) {
+            spaceMap = spaceService.listByIds(spaceIdSet).stream().collect(Collectors.toMap(Space::getId, s -> s));
+        }
+        final Map<Long, Space> finalSpaceMap = spaceMap;
         List<PictureVO> pictureVOS = pictures.stream().map(picture -> {
             PictureVO pictureVO = PictureVO.objToVo(picture);
             List<User> userList = userIdUserListMap.get(picture.getUserId());
@@ -472,6 +503,11 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
                 pictureVO.setUser(userService.getUserVO(userList.get(0)));
             }
             pictureVO.setLikeCount(pictureLikeService.getLikeCount(picture.getId(), picture.getLikeCount()));
+            // 填充空间类型
+            Long spaceId = picture.getSpaceId();
+            if (spaceId != null && finalSpaceMap.containsKey(spaceId)) {
+                pictureVO.setSpaceType(finalSpaceMap.get(spaceId).getSpaceType());
+            }
             return pictureVO;
         }).collect(Collectors.toList());
         pictureVOPage.setRecords(pictureVOS);
@@ -533,6 +569,9 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
     private PictureVO buildPictureVOWithExtra(PictureVO pictureVO, Long id, User loginUser) {
         Long spaceId = pictureVO.getSpaceId();
         Space space = spaceId != null ? spaceService.getById(spaceId) : null;
+        if (space != null) {
+            pictureVO.setSpaceType(space.getSpaceType());
+        }
         pictureVO.setPermissionList(spaceUserAuthManager.getPermissionList(space, loginUser));
         pictureVO.setLikeCount(pictureLikeService.getLikeCount(id, pictureVO.getLikeCount()));
         fillLikeStatus(pictureVO, id, loginUser);
@@ -731,6 +770,57 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
             return Long.parseLong(parts[2]);
         } catch (NumberFormatException e) {
             return null;
+        }
+    }
+
+    /**
+     * 下载图片
+     */
+    @Override
+    public void downloadPicture(Long pictureId, User loginUser, HttpServletResponse response) {
+        ThrowUtils.throwIf(pictureId == null || pictureId <= 0, ErrorCode.PARAMS_ERROR);
+        Picture picture = this.getById(pictureId);
+        ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR, "图片不存在");
+
+        // 执行下载
+        String pictureUrl = picture.getUrl();
+        String pictureName = picture.getName();
+        String format = picture.getPicFormat();
+        if (StrUtil.isBlank(format)) {
+            format = "png";
+        }
+        String fileName = pictureName + "." + format;
+
+        InputStream inputStream = null;
+        OutputStream outputStream = null;
+        try {
+            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+            response.setContentType("application/octet-stream");
+            String encodedFileName = java.net.URLEncoder.encode(fileName, StandardCharsets.UTF_8.name()).replace("+", "%20");
+            response.setHeader("Content-Disposition", "attachment; filename=\"" + encodedFileName + "\"; filename*=utf-8''" + encodedFileName);
+
+            URL url = new URL(pictureUrl);
+            URLConnection connection = url.openConnection();
+            inputStream = connection.getInputStream();
+            outputStream = response.getOutputStream();
+
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+            }
+            outputStream.flush();
+        } catch (Exception e) {
+            log.error("下载图片失败", e);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "下载图片失败");
+        } finally {
+            if (inputStream != null) {
+                try {
+                    inputStream.close();
+                } catch (IOException e) {
+                    log.error("关闭输入流失败", e);
+                }
+            }
         }
     }
 }

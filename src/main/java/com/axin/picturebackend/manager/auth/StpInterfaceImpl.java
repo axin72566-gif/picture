@@ -14,21 +14,26 @@ import com.axin.picturebackend.exception.BusinessException;
 import com.axin.picturebackend.exception.ErrorCode;
 import com.axin.picturebackend.exception.ThrowUtils;
 import com.axin.picturebackend.manager.auth.model.SpaceUserAuthContext;
+import com.axin.picturebackend.manager.auth.model.SpaceUserPermissionConstant;
 import com.axin.picturebackend.model.Enum.SpaceRoleEnum;
 import com.axin.picturebackend.model.Enum.SpaceTypeEnum;
 import com.axin.picturebackend.model.entity.Space;
 import com.axin.picturebackend.model.entity.SpaceUser;
 import com.axin.picturebackend.model.entity.User;
+import com.axin.picturebackend.model.entity.Picture;
+import com.axin.picturebackend.service.PictureService;
 import com.axin.picturebackend.service.SpaceService;
 import com.axin.picturebackend.service.SpaceUserService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +56,10 @@ public class StpInterfaceImpl implements StpInterface {
 
     @Resource
     private SpaceService spaceService;
+
+    @Lazy
+    @Resource
+    private PictureService pictureService;
 
     /**
      * 返回指定账号在当前请求下所拥有的权限码集合
@@ -101,10 +110,32 @@ public class StpInterfaceImpl implements StpInterface {
         // 操作公共图库图片
         Long pictureId = authContext.getPictureId();
         if (ObjUtil.isNotEmpty(pictureId)) {
-            if (pictureId.equals(userId)) {
+            Picture picture = pictureService.getById(pictureId);
+            ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR, "图片不存在");
+            Long spaceIdDownload = picture.getSpaceId();
+            if (spaceIdDownload == null) {
+                // 公共图库：所有人都有查看和下载权限
+                List<String> permissions = new ArrayList<>(spaceUserAuthManager.getPermissionsByRole(SpaceRoleEnum.VIEWER.getValue()));
+                permissions.add(SpaceUserPermissionConstant.PICTURE_DOWNLOAD);
+                return permissions;
+            }
+            // 空间图片：根据空间权限校验
+            Space space = spaceService.getById(spaceId);
+            ThrowUtils.throwIf(space == null, ErrorCode.NOT_FOUND_ERROR, "空间不存在");
+            if (space.getSpaceType() == SpaceTypeEnum.TEAM.getValue()) {
+                SpaceUser loginSpaceUser = spaceUserService.getOne(
+                        new QueryWrapper<SpaceUser>().eq("userId", userId).eq("spaceId", spaceId)
+                );
+                if (loginSpaceUser == null) {
+                    return Collections.emptyList();
+                }
+                return spaceUserAuthManager.getPermissionsByRole(loginSpaceUser.getSpaceRole());
+            }
+            // 私有空间：仅创建者有权限
+            if (space.getUserId().equals(userId)) {
                 return spaceUserAuthManager.getPermissionsByRole(SpaceRoleEnum.ADMIN.getValue());
             }
-            return spaceUserAuthManager.getPermissionsByRole(SpaceRoleEnum.VIEWER.getValue());
+            return Collections.emptyList();
         }
 
         return spaceUserAuthManager.getPermissionsByRole(SpaceRoleEnum.ADMIN.getValue());

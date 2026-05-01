@@ -22,6 +22,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import java.util.Arrays;
 import java.util.List;
 
@@ -192,6 +193,16 @@ public class PictureController {
         ThrowUtils.throwIf(pictureReviewRequest == null, ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
         return ResultUtils.success(pictureService.doPictureReview(pictureReviewRequest, loginUser));
+    }
+
+    /**
+     * 下载图片
+     */
+    @GetMapping("/download")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_DOWNLOAD)
+    public void downloadPicture(@RequestParam Long id, HttpServletRequest request, HttpServletResponse response) {
+        User loginUser = userService.getLoginUser(request);
+        pictureService.downloadPicture(id, loginUser, response);
     }
 
     // ==================== 点赞 ====================

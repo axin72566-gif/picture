@@ -9,6 +9,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 
+import javax.servlet.http.HttpServletResponse;
+
 /**
 * @author kdkt1
 * @description 针对表【picture(图片)】的数据库操作Service
@@ -122,4 +124,13 @@ public interface PictureService extends IService<Picture> {
 	 * @return 成功创建的图片数
 	 */
 	Integer uploadPictureByBatch(PictureUploadByBatchRequest pictureUploadByBatchRequest, User loginUser);
+
+	/**
+	 * 下载图片
+	 *
+	 * @param pictureId 图片 id
+	 * @param loginUser 登录用户
+	 * @param response  响应对象
+	 */
+	void downloadPicture(Long pictureId, User loginUser, HttpServletResponse response);
 }

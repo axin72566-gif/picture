@@ -1,23 +1,28 @@
 package com.axin.picturebackend.manager.pictureClear;
 
-import com.axin.picturebackend.constant.PictureConstant;
 import com.axin.picturebackend.exception.BusinessException;
 import com.axin.picturebackend.exception.ErrorCode;
+import com.axin.picturebackend.config.CosClientConfig;
 import com.axin.picturebackend.exception.ThrowUtils;
 import com.axin.picturebackend.manager.CosManager;
 import com.axin.picturebackend.model.Enum.PictureReviewStatusEnum;
 import com.axin.picturebackend.model.entity.Picture;
 import com.axin.picturebackend.service.PictureService;
 import com.axin.picturebackend.service.SysNoticeService;
-import com.axin.picturebackend.service.UserService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.annotation.Resource;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
@@ -44,10 +49,16 @@ public class PublicPictureClearManager {
     private CosManager cosManager;
 
     @Resource
-    private UserService userService;
+    private CosClientConfig cosClientConfig;
 
     @Resource
     private SysNoticeService sysNoticeService;
+
+    @Resource
+    private TransactionTemplate transactionTemplate;
+
+    @Resource(name = "backgroundExecutor")
+    private Executor backgroundExecutor;
 
     /**
      * 一级清理：每天凌晨 3 点清理审核拒绝的图片
@@ -118,25 +129,66 @@ public class PublicPictureClearManager {
     }
 
     /**
-     * 执行图片清理：删除数据库记录 → 删除 COS 文件 → 发送系统通知
+     * 执行图片清理：分批处理避免内存溢出
      *
      * @param queryWrapper 查询条件
      */
     private void clearPicture(QueryWrapper<Picture> queryWrapper) {
-        List<Picture> pictureList = pictureService.list(queryWrapper);
-        if (pictureList.isEmpty()) {
-            log.info("[公共图库清理] 无符合条件的图片，跳过");
-            return;
+        long pageSize = 500;
+        int totalDeleted = 0;
+
+        while (true) {
+            Page<Picture> page = pictureService.page(new Page<>(1, pageSize), queryWrapper);
+            List<Picture> pictureList = page.getRecords();
+            if (CollectionUtils.isEmpty(pictureList)) {
+                break;
+            }
+
+            List<Long> ids = pictureList.stream().map(Picture::getId).collect(Collectors.toList());
+            Boolean success = transactionTemplate.execute(status -> {
+                boolean removed = pictureService.removeByIds(ids);
+                ThrowUtils.throwIf(!removed, ErrorCode.OPERATION_ERROR, "定时清理任务执行失败");
+                return true;
+            });
+
+            if (Boolean.TRUE.equals(success)) {
+                // 异步清理 COS 文件并发送通知
+                asyncCleanCosAndNotify(pictureList);
+            }
+
+            totalDeleted += pictureList.size();
+            if (pictureList.size() < pageSize) {
+                break;
+            }
         }
-        boolean removed = pictureService.remove(queryWrapper);
-        ThrowUtils.throwIf(!removed, ErrorCode.OPERATION_ERROR, "定时清理任务执行失败");
-        // 删除 COS 文件
-        pictureList.forEach(picture ->
-                cosManager.deleteObject(PictureConstant.PUBLIC_PICTURE + picture.getUserId())
-        );
-        // 批量发送清理通知给图片作者
-        sendClearNotices(pictureList);
-        log.info("[公共图库清理] 完成，共清理 {} 张图片", pictureList.size());
+        log.info("[公共图库清理] 完成，共清理 {} 张图片", totalDeleted);
+    }
+
+    /**
+     * 异步清理 COS 文件并发送通知
+     */
+    private void asyncCleanCosAndNotify(List<Picture> pictureList) {
+        CompletableFuture.runAsync(() -> {
+            // 1. 清理 COS 文件
+            for (Picture picture : pictureList) {
+                try {
+                    String url = picture.getUrl();
+                    if (StringUtils.isNotBlank(url)) {
+                        String key = url.replace(cosClientConfig.getHost() + "/", "");
+                        cosManager.deleteObject(key);
+                    }
+                    String thumbnailUrl = picture.getThumbnailUrl();
+                    if (StringUtils.isNotBlank(thumbnailUrl)) {
+                        String thumbKey = thumbnailUrl.replace(cosClientConfig.getHost() + "/", "");
+                        cosManager.deleteObject(thumbKey);
+                    }
+                } catch (Exception e) {
+                    log.error("[公共图库清理] 清理 COS 文件失败, pictureId={}, error={}", picture.getId(), e.getMessage());
+                }
+            }
+            // 2. 发送清理通知给图片作者
+            sendClearNotices(pictureList);
+        }, backgroundExecutor);
     }
 
     /**
