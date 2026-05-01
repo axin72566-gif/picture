@@ -31,6 +31,7 @@ import com.axin.picturebackend.model.entity.Space;
 import com.axin.picturebackend.model.entity.SpaceUser;
 import com.axin.picturebackend.model.entity.User;
 import com.axin.picturebackend.model.vo.PictureVO;
+import com.axin.picturebackend.model.vo.UserVO;
 import com.axin.picturebackend.service.PictureLikeService;
 import com.axin.picturebackend.service.PictureService;
 import com.axin.picturebackend.service.SpaceService;
@@ -61,6 +62,7 @@ import org.springframework.web.multipart.MultipartFile;
 import javax.annotation.Resource;
 import java.io.IOException;
 import java.util.*;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -609,8 +611,31 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         Space space = spaceId != null ? spaceService.getById(spaceId) : null;
         pictureVO.setPermissionList(spaceUserAuthManager.getPermissionList(space, loginUser));
         fillLikeStatus(pictureVO, id, loginUser);
+        fillTopLikedUserList(pictureVO, id);
 
         return pictureVO;
+    }
+
+    /**
+     * 填充最近点赞用户列表
+     */
+    private void fillTopLikedUserList(PictureVO pictureVO, Long pictureId) {
+        List<Long> topLikedUserIds = pictureLikeService.listTopLikedUserIds(pictureId, 10);
+        if (CollectionUtils.isEmpty(topLikedUserIds)) {
+            pictureVO.setTopLikedUserList(Collections.emptyList());
+            return;
+        }
+        List<User> userList = userService.listByIds(topLikedUserIds);
+        // 按 ID 列表顺序排序
+        Map<Long, User> userMap = userList.stream().collect(Collectors.toMap(User::getId, u -> u));
+        List<UserVO> userVOList = topLikedUserIds.stream()
+                .map(userId -> {
+                    User user = userMap.get(userId);
+                    return user != null ? userService.getUserVO(user) : null;
+                })
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+        pictureVO.setTopLikedUserList(userVOList);
     }
 
     /**
@@ -625,6 +650,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         pictureVO.setPermissionList(spaceUserAuthManager.getPermissionList(space, loginUser));
         pictureVO.setLikeCount(pictureLikeService.getLikeCount(id, pictureVO.getLikeCount()));
         fillLikeStatus(pictureVO, id, loginUser);
+        fillTopLikedUserList(pictureVO, id);
         return pictureVO;
     }
 

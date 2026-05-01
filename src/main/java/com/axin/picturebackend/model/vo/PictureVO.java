@@ -123,6 +123,11 @@ public class PictureVO implements Serializable {
 	 */
 	private Boolean isLiked;
 
+	/**
+	 * 最近点赞的10位用户
+	 */
+	private List<UserVO> topLikedUserList;
+
 
 	private static final long serialVersionUID = 1L;
 

@@ -141,6 +141,18 @@ public class PictureLikeServiceImpl extends ServiceImpl<PictureLikeMapper, Pictu
         return dbCount == null ? 0 : dbCount;
     }
 
+    @Override
+    public List<Long> listTopLikedUserIds(Long pictureId, int limit) {
+        if (pictureId == null || pictureId <= 0) {
+            return Collections.emptyList();
+        }
+        QueryWrapper<PictureLike> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("pictureId", pictureId);
+        queryWrapper.orderByDesc("createTime");
+        queryWrapper.last("limit " + limit);
+        return this.list(queryWrapper).stream().map(PictureLike::getUserId).collect(Collectors.toList());
+    }
+
     // ==================== 定时任务：写库 ====================
 
     /**

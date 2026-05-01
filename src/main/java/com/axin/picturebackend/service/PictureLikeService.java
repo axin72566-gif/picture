@@ -47,4 +47,12 @@ public interface PictureLikeService extends IService<PictureLike> {
      * @return 点赞数
      */
     long getLikeCount(Long pictureId, Long dbCount);
+
+    /**
+     * 获取最近点赞的10位用户ID
+     * @param pictureId 图片ID
+     * @param limit 限制数量
+     * @return 用户ID列表
+     */
+    List<Long> listTopLikedUserIds(Long pictureId, int limit);
 }
