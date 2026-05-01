@@ -21,6 +21,7 @@ import org.springframework.util.CollectionUtils;
 
 import javax.annotation.Resource;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -72,19 +73,27 @@ public class PictureLikeServiceImpl extends ServiceImpl<PictureLikeMapper, Pictu
             if (currentCount != null && currentCount < 0) {
                 stringRedisTemplate.opsForValue().set(redisKey, "0");
             }
+            // 移除排行榜中的用户
+            stringRedisTemplate.opsForZSet().remove(RedisConstant.PICTURE_LIKE_TOP_USERS + pictureId, String.valueOf(userId));
             return false;
         } else {
             // 未点赞 → 点赞
             PictureLike pictureLike = new PictureLike();
             pictureLike.setUserId(userId);
             pictureLike.setPictureId(pictureId);
-            pictureLike.setCreateTime(new Date());
+            Date createTime = new Date();
+            pictureLike.setCreateTime(createTime);
             boolean saved = this.save(pictureLike);
             if (!saved) {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "点赞失败");
             }
             // Redis INCR
             stringRedisTemplate.opsForValue().increment(RedisConstant.PICTURE_LIKE_COUNT + pictureId);
+            // 更新排行榜 (ZSet)，score 使用时间戳，保持最新的在前面
+            stringRedisTemplate.opsForZSet().add(RedisConstant.PICTURE_LIKE_TOP_USERS + pictureId, String.valueOf(userId), createTime.getTime());
+            // 只保留最近的 100 条记录，防止 Redis 占用过大
+            stringRedisTemplate.opsForZSet().removeRange(RedisConstant.PICTURE_LIKE_TOP_USERS + pictureId, 0, -101);
+            
             // 发送点赞通知给图片作者（自己给自己点赞不通知）
             try {
                 Picture picture = pictureService.getById(pictureId);
@@ -146,11 +155,32 @@ public class PictureLikeServiceImpl extends ServiceImpl<PictureLikeMapper, Pictu
         if (pictureId == null || pictureId <= 0) {
             return Collections.emptyList();
         }
+        String redisKey = RedisConstant.PICTURE_LIKE_TOP_USERS + pictureId;
+        // 1. 尝试从 Redis ZSet 获取（按 score 倒序，即时间从新到旧）
+        Set<String> topUserIds = stringRedisTemplate.opsForZSet().reverseRange(redisKey, 0, limit - 1);
+        if (topUserIds != null && !topUserIds.isEmpty()) {
+            return topUserIds.stream().map(Long::parseLong).collect(Collectors.toList());
+        }
+
+        // 2. 如果 Redis 没有，从数据库查询
         QueryWrapper<PictureLike> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("pictureId", pictureId);
         queryWrapper.orderByDesc("createTime");
-        queryWrapper.last("limit " + limit);
-        return this.list(queryWrapper).stream().map(PictureLike::getUserId).collect(Collectors.toList());
+        queryWrapper.last("limit " + Math.max(limit, 100)); // 顺便多查点，回填给 Redis
+        List<PictureLike> pictureLikes = this.list(queryWrapper);
+        if (CollectionUtils.isEmpty(pictureLikes)) {
+            return Collections.emptyList();
+        }
+
+        // 3. 异步或同步回填 Redis（这里简单同步处理）
+        List<Long> dbUserIds = pictureLikes.stream().map(PictureLike::getUserId).collect(Collectors.toList());
+        for (PictureLike like : pictureLikes) {
+            stringRedisTemplate.opsForZSet().add(redisKey, String.valueOf(like.getUserId()), like.getCreateTime().getTime());
+        }
+        // 设置过期时间，防止冷数据长期占用
+        stringRedisTemplate.expire(redisKey, 24, TimeUnit.HOURS);
+
+        return dbUserIds.stream().limit(limit).collect(Collectors.toList());
     }
 
     // ==================== 定时任务：写库 ====================

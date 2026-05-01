@@ -7,4 +7,9 @@ public class RedisConstant {
 	public static final String PICTURE_VIEW_COUNT = "picture:view:";
 
 	public static final String PICTURE_LIKE_COUNT = "picture:like:";
+
+	/**
+	 * 图片点赞用户排行榜 (ZSet)
+	 */
+	public static final String PICTURE_LIKE_TOP_USERS = "picture:like:top:";
 }
