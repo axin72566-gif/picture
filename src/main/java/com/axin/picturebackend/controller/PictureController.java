@@ -218,4 +218,17 @@ public class PictureController {
         boolean result=pictureLikeService.doLike(pictureLikeRequest.getPictureId(), loginUser);
         return ResultUtils.success(result);
     }
+
+    // ==================== 每日推荐 ====================
+
+    /**
+     * 每日图片推荐（登录用户）
+     * 返回前一天热度最高的30张图片
+     */
+    @GetMapping("/recommend/daily")
+    public BaseResponse<List<PictureVO>> listDailyRecommendation(HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        List<PictureVO> pictureVOList = pictureService.getDailyRecommendation(loginUser);
+        return ResultUtils.success(pictureVOList);
+    }
 }

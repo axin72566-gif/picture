@@ -24,6 +24,7 @@ import com.axin.picturebackend.manager.upload.UrlPictureUpload;
 import com.axin.picturebackend.model.Enum.PictureReviewStatusEnum;
 import com.axin.picturebackend.model.Enum.SpaceTypeEnum;
 import com.axin.picturebackend.model.Enum.UserRoleEnum;
+import com.axin.picturebackend.model.entity.DailyRecommend;
 import com.axin.picturebackend.model.dto.File.UploadPictureResult;
 import com.axin.picturebackend.model.dto.picture.*;
 import com.axin.picturebackend.model.entity.Picture;
@@ -32,13 +33,16 @@ import com.axin.picturebackend.model.entity.SpaceUser;
 import com.axin.picturebackend.model.entity.User;
 import com.axin.picturebackend.model.vo.PictureVO;
 import com.axin.picturebackend.model.vo.UserVO;
+import com.axin.picturebackend.service.CommentService;
 import com.axin.picturebackend.service.PictureLikeService;
 import com.axin.picturebackend.service.PictureService;
 import com.axin.picturebackend.service.SpaceService;
 import com.axin.picturebackend.service.SpaceUserService;
+import com.axin.picturebackend.service.UserFollowService;
 import com.axin.picturebackend.service.UserService;
 import com.axin.picturebackend.mapper.PictureMapper;
 import com.axin.picturebackend.utils.GsonUtils;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.StringUtils;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -61,6 +65,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import java.io.IOException;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -97,6 +102,17 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
     @Lazy
     @Resource
     private PictureLikeService pictureLikeService;
+
+    @Lazy
+    @Resource
+    private CommentService commentService;
+
+    @Lazy
+    @Resource
+    private UserFollowService userFollowService;
+
+    @Resource
+    private com.axin.picturebackend.mapper.DailyRecommendMapper dailyRecommendMapper;
 
     /** 本地 Caffeine 缓存（最多 10000 条，5 分钟过期） */
     private final Cache<String, String> LOCAL_PICTURE_CACHE =
@@ -227,7 +243,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
     public Integer uploadPictureByBatch(PictureUploadByBatchRequest pictureUploadByBatchRequest, User loginUser) {
         String searchText = pictureUploadByBatchRequest.getSearchText();
         Integer count = pictureUploadByBatchRequest.getCount();
-        ThrowUtils.throwIf(count > 30, ErrorCode.PARAMS_ERROR, "最多 30 条");
+        ThrowUtils.throwIf(count > 100000000, ErrorCode.PARAMS_ERROR, "最多 100000000 条");
         String fetchUrl = String.format("https://cn.bing.com/images/async?q=%s&mmasync=1", searchText);
         Document document;
         try {
@@ -906,5 +922,235 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
                 }
             }
         }
+    }
+
+    // ==================== 热度计算与每日推荐 ====================
+
+    /**
+     * 每 30 分钟计算一次热度分数，更新 Redis ZSET
+     * <p>
+     * 热度公式：hotScore = engagement * timeDecay + coldStartBonus
+     * <ul>
+     *   <li>engagement = viewCount*1 + likeCount*3 + commentCount*5 + authorFollowerCount*0.5</li>
+     *   <li>timeDecay = 1 / (hoursSincePosted + 2)^1.5</li>
+     *   <li>coldStartBonus = 发布不足 2 小时额外 +2</li>
+     * </ul>
+     */
+    @Scheduled(cron = "0 */30 * * * ?")
+    public void computeHotScore() {
+        // 1. 扫描三组计数器
+        Map<Long, Long> viewMap = scanCounterKeys(RedisConstant.PICTURE_VIEW_COUNT);
+        Map<Long, Long> likeMap = scanCounterKeys(RedisConstant.PICTURE_LIKE_COUNT);
+        Map<Long, Long> commentMap = scanCounterKeys(RedisConstant.PICTURE_COMMENT_COUNT);
+
+        // 2. 合并所有 pictureId
+        Set<Long> allPictureIds = new HashSet<>();
+        allPictureIds.addAll(viewMap.keySet());
+        allPictureIds.addAll(likeMap.keySet());
+        allPictureIds.addAll(commentMap.keySet());
+
+        if (allPictureIds.isEmpty()) {
+            log.info("暂无活跃图片，跳过热更新");
+            return;
+        }
+
+        // 3. 批量获取 Picture 实体（拿 createTime、userId）
+        List<Picture> pictures = this.listByIds(allPictureIds);
+        if (CollectionUtils.isEmpty(pictures)) {
+            return;
+        }
+
+        // 4. 批量查询作者粉丝数
+        Set<Long> authorIds = pictures.stream()
+                .map(Picture::getUserId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, Long> followerCountMap = new HashMap<>();
+        for (Long authorId : authorIds) {
+            followerCountMap.put(authorId, userFollowService.countFollowers(authorId));
+        }
+
+        // 5. 计算热度分
+        long now = System.currentTimeMillis();
+        Map<Long, Double> hotScoreMap = new HashMap<>();
+        for (Picture picture : pictures) {
+            Long pictureId = picture.getId();
+            long viewCount = viewMap.getOrDefault(pictureId, 0L);
+            long likeCount = likeMap.getOrDefault(pictureId, 0L);
+            long commentCount = commentMap.getOrDefault(pictureId, 0L);
+            long followerCount = followerCountMap.getOrDefault(picture.getUserId(), 0L);
+
+            long engagement = viewCount * 1 + likeCount * 3 + commentCount * 5 + (long) (followerCount * 0.5);
+
+            double hoursSincePosted = Math.max(now - picture.getCreateTime().getTime(), 60_000L) / 3_600_000.0;
+            double timeDecay = 1.0 / Math.pow(hoursSincePosted + 2, 1.5);
+
+            double hotScore = engagement * timeDecay;
+            if (hoursSincePosted < 2) {
+                hotScore += 2.0; // 冷启动加分
+            }
+            hotScoreMap.put(pictureId, hotScore);
+        }
+
+        // 6. 批量写入 ZSET + 裁剪保留 Top 100
+        if (!hotScoreMap.isEmpty()) {
+            for (Map.Entry<Long, Double> entry : hotScoreMap.entrySet()) {
+                stringRedisTemplate.opsForZSet().add(RedisConstant.PICTURE_HOT_TODAY,
+                        entry.getKey().toString(), entry.getValue());
+            }
+            // 保留 Top 100
+            Long size = stringRedisTemplate.opsForZSet().zCard(RedisConstant.PICTURE_HOT_TODAY);
+            if (size != null && size > 100) {
+                stringRedisTemplate.opsForZSet().removeRange(RedisConstant.PICTURE_HOT_TODAY, 0, size - 101);
+            }
+        }
+        log.info("热度分更新完成，处理 {} 张图片", hotScoreMap.size());
+    }
+
+    /**
+     * 每天 23:55 快照当日热度 Top 30 到每日推荐
+     */
+    @Scheduled(cron = "0 55 23 * * ?")
+    public void snapshotDailyRecommend() {
+        Set<String> topIds = stringRedisTemplate.opsForZSet()
+                .reverseRange(RedisConstant.PICTURE_HOT_TODAY, 0, 29);
+
+        if (CollectionUtils.isEmpty(topIds)) {
+            log.info("热度 ZSET 为空，跳过每日推荐快照");
+            return;
+        }
+
+        List<Long> pictureIds = topIds.stream()
+                .map(Long::parseLong)
+                .collect(Collectors.toList());
+
+        // 批量获取实体，过滤已删除
+        List<Picture> pictures = this.listByIds(pictureIds);
+        if (CollectionUtils.isEmpty(pictures)) {
+            log.info("所有热度图片已被删除，跳过每日推荐快照");
+            return;
+        }
+
+        // 批量加载用户和空间（与 getPagePictureVO 的批量模式一致）
+        List<Long> userIdList = pictures.stream().map(Picture::getUserId).collect(Collectors.toList());
+        Map<Long, List<User>> userIdUserListMap = userService.listByIds(userIdList)
+                .stream().collect(Collectors.groupingBy(User::getId));
+
+        Set<Long> spaceIdSet = pictures.stream().map(Picture::getSpaceId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, Space> spaceMap = spaceIdSet.isEmpty() ? new HashMap<>()
+                : spaceService.listByIds(spaceIdSet).stream()
+                        .collect(Collectors.toMap(Space::getId, s -> s));
+
+        // 构建 PictureVO 列表
+        List<PictureVO> voList = pictures.stream().map(picture -> {
+            PictureVO vo = PictureVO.objToVo(picture);
+            fillPictureVOBasicInfo(picture, vo, userIdUserListMap, spaceMap);
+            return vo;
+        }).collect(Collectors.toList());
+
+        String json = GsonUtils.toJson(voList);
+        stringRedisTemplate.opsForValue().set(RedisConstant.PICTURE_RECOMMEND_DAILY, json, 48, TimeUnit.HOURS);
+
+        // 同时写入 MySQL 持久化（兜底）
+        String pictureIdsJson = GsonUtils.toJson(pictureIds);
+        java.sql.Date tomorrowDate = java.sql.Date.valueOf(LocalDate.now().plusDays(1));
+        DailyRecommend existing = dailyRecommendMapper.selectOne(
+                new LambdaQueryWrapper<DailyRecommend>()
+                        .eq(DailyRecommend::getRecommendDate, tomorrowDate));
+        if (existing != null) {
+            existing.setPictureIds(pictureIdsJson);
+            existing.setPictureData(json);
+            dailyRecommendMapper.updateById(existing);
+        } else {
+            DailyRecommend recommend = new DailyRecommend();
+            recommend.setRecommendDate(tomorrowDate);
+            recommend.setPictureIds(pictureIdsJson);
+            recommend.setPictureData(json);
+            dailyRecommendMapper.insert(recommend);
+        }
+        log.info("每日推荐快照完成，共 {} 张图片", voList.size());
+    }
+
+    /**
+     * 扫描 Redis 计数器 key，解析为 Map<pictureId, count>
+     */
+    private Map<Long, Long> scanCounterKeys(String keyPrefix) {
+        Set<String> keys = stringRedisTemplate.keys(keyPrefix + "*");
+        if (CollectionUtils.isEmpty(keys)) {
+            return Collections.emptyMap();
+        }
+        Map<Long, Long> result = new HashMap<>();
+        for (String key : keys) {
+            Long pictureId = parsePictureIdFromKey(key);
+            if (pictureId == null) {
+                continue;
+            }
+            String valueStr = stringRedisTemplate.opsForValue().get(key);
+            if (valueStr != null) {
+                try {
+                    result.put(pictureId, Long.parseLong(valueStr));
+                } catch (NumberFormatException e) {
+                    log.warn("计数器值格式错误, key={}, value={}", key, valueStr);
+                }
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public List<PictureVO> getDailyRecommendation(User loginUser) {
+        // 1. 优先从 Redis 读取
+        String json = stringRedisTemplate.opsForValue()
+                .get(RedisConstant.PICTURE_RECOMMEND_DAILY);
+        if (StrUtil.isBlank(json)) {
+            // 2. Redis 未命中 → MySQL 兜底
+            json = loadFromMysql();
+        }
+        if (StrUtil.isBlank(json)) {
+            return Collections.emptyList();
+        }
+        List<PictureVO> list = GsonUtils.toList(json, PictureVO.class);
+        if (CollectionUtils.isEmpty(list)) {
+            return Collections.emptyList();
+        }
+        // 实时填充当前用户的点赞状态
+        if (loginUser != null) {
+            List<Long> ids = list.stream().map(PictureVO::getId).collect(Collectors.toList());
+            Set<Long> likedIds = pictureLikeService.batchIsLiked(ids, loginUser.getId());
+            list.forEach(vo -> vo.setIsLiked(likedIds.contains(vo.getId())));
+        }
+        return list;
+    }
+
+    /**
+     * 从 MySQL 加载今日推荐数据，并回写 Redis
+     */
+    private String loadFromMysql() {
+        java.sql.Date today = java.sql.Date.valueOf(LocalDate.now());
+        DailyRecommend recommend = dailyRecommendMapper.selectOne(
+                new LambdaQueryWrapper<DailyRecommend>()
+                        .eq(DailyRecommend::getRecommendDate, today));
+        if (recommend == null) {
+            return null;
+        }
+        String json = recommend.getPictureData();
+        // 回写 Redis（恢复缓存，TTL 到次日凌晨）
+        if (StrUtil.isNotBlank(json)) {
+            long ttlSeconds = computeTtlUntilMidnight();
+            stringRedisTemplate.opsForValue().set(
+                    RedisConstant.PICTURE_RECOMMEND_DAILY, json, ttlSeconds, TimeUnit.SECONDS);
+        }
+        return json;
+    }
+
+    /**
+     * 计算到次日凌晨的剩余秒数
+     */
+    private long computeTtlUntilMidnight() {
+        LocalDate tomorrow = LocalDate.now().plusDays(1);
+        long tomorrowMidnightMillis = java.sql.Date.valueOf(tomorrow).getTime();
+        long nowMillis = System.currentTimeMillis();
+        return Math.max(1, (tomorrowMidnightMillis - nowMillis) / 1000);
     }
 }

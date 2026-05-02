@@ -36,4 +36,12 @@ public interface UserFollowService extends IService<UserFollow> {
      * @return 关注的用户列表
      */
     List<User> listFollowing(Long userId);
+
+    /**
+     * 统计用户的粉丝数量
+     *
+     * @param userId 用户ID
+     * @return 粉丝数
+     */
+    long countFollowers(Long userId);
 }

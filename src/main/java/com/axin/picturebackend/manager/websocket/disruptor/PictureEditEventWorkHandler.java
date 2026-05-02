@@ -7,36 +7,44 @@ import com.axin.picturebackend.manager.websocket.model.PictureEditRequestMessage
 import com.axin.picturebackend.manager.websocket.model.PictureEditResponseMessage;
 import com.axin.picturebackend.model.entity.User;
 import com.axin.picturebackend.service.UserService;
-import com.lmax.disruptor.WorkHandler;
+import com.lmax.disruptor.EventHandler;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
-import javax.annotation.Resource;
-
 /**
- * Disruptor 事件消费处理器
+ * Disruptor 事件消费处理器（EventHandler 模式，按 pictureId 哈希分区保证同图有序）
  * <p>根据消息类型分发至 {@link PictureEditHandler} 的对应处理方法</p>
  */
 @Slf4j
-@Component
-public class PictureEditEventWorkHandler implements WorkHandler<PictureEditEvent> {
+public class PictureEditEventWorkHandler implements EventHandler<PictureEditEvent> {
 
-    @Lazy
-    @Resource
-    private PictureEditHandler pictureEditHandler;
+    private final PictureEditHandler pictureEditHandler;
 
-    @Resource
-    private UserService userService;
+    private final UserService userService;
+
+    private final int partitionIndex;
+
+    private final int partitionCount;
+
+    public PictureEditEventWorkHandler(PictureEditHandler pictureEditHandler, UserService userService,
+                                       int partitionIndex, int partitionCount) {
+        this.pictureEditHandler = pictureEditHandler;
+        this.userService = userService;
+        this.partitionIndex = partitionIndex;
+        this.partitionCount = partitionCount;
+    }
 
     @Override
-    public void onEvent(PictureEditEvent event) throws Exception {
+    public void onEvent(PictureEditEvent event, long sequence, boolean endOfBatch) throws Exception {
+        // 按 pictureId 哈希分区，只处理属于自己分区的消息，保证同图事件顺序
+        Long pictureId = event.getPictureId();
+        if (pictureId == null || Math.abs(pictureId.hashCode()) % partitionCount != partitionIndex) {
+            return;
+        }
         PictureEditRequestMessage requestMessage = event.getPictureEditRequestMessage();
         WebSocketSession session = event.getSession();
         User user = event.getUser();
-        Long pictureId = event.getPictureId();
 
         String type = requestMessage.getType();
         PictureEditMessageTypeEnum typeEnum = PictureEditMessageTypeEnum.getEnumByValue(type);

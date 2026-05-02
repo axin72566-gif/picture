@@ -39,4 +39,12 @@ public interface CommentService extends IService<Comment> {
      * @return 树形评论列表（仅一级，children 内嵌子评论）
      */
     List<CommentVO> listCommentTree(CommentQueryRequest commentQueryRequest, User loginUser);
+
+    /**
+     * 获取图片评论数（Redis 优先，DB fallback）
+     *
+     * @param pictureId 图片ID
+     * @return 评论数
+     */
+    long getCommentCount(Long pictureId);
 }

@@ -12,6 +12,7 @@ import com.axin.picturebackend.service.UserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -22,6 +23,7 @@ import javax.annotation.Resource;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 
 /**
  * 图片协同编辑 WebSocket 处理器
@@ -49,6 +51,9 @@ public class PictureEditHandler extends TextWebSocketHandler {
 
     @Resource
     private PictureEditEventProducer pictureEditEventProducer;
+
+    @Resource(name = "backgroundExecutor")
+    private Executor backgroundExecutor;
 
     /** key: pictureId, value: 当前正在编辑的用户 ID */
     private final Map<Long, Long> pictureEditingUsers = new ConcurrentHashMap<>();
@@ -166,22 +171,45 @@ public class PictureEditHandler extends TextWebSocketHandler {
     // ==================== 私有工具方法 ====================
 
     /**
-     * 广播消息给指定图片的所有会话，可选排除某个 session
+     * 广播消息给指定图片的所有会话（并行发送），可选排除某个 session
      */
     private void broadcastToPicture(Long pictureId, PictureEditResponseMessage responseMessage,
-                                    WebSocketSession excludeSession) throws Exception {
+                                    WebSocketSession excludeSession) {
         Set<WebSocketSession> sessionSet = pictureSessions.get(pictureId);
         if (CollUtil.isEmpty(sessionSet)) {
             return;
         }
-        String json = OBJECT_MAPPER.writeValueAsString(responseMessage);
+        String json;
+        try {
+            json = OBJECT_MAPPER.writeValueAsString(responseMessage);
+        } catch (Exception e) {
+            return;
+        }
         TextMessage textMessage = new TextMessage(json);
         for (WebSocketSession session : sessionSet) {
             if (excludeSession != null && excludeSession.equals(session)) {
                 continue;
             }
             if (session.isOpen()) {
-                session.sendMessage(textMessage);
+                backgroundExecutor.execute(() -> {
+                    try {
+                        session.sendMessage(textMessage);
+                    } catch (Exception ignored) {
+                    }
+                });
+            }
+        }
+    }
+
+    /**
+     * 定时清理已关闭的 WebSocket 会话，防止异常断开时残留
+     */
+    @Scheduled(fixedRate = 60000)
+    public void cleanDeadSessions() {
+        for (Map.Entry<Long, Set<WebSocketSession>> entry : pictureSessions.entrySet()) {
+            entry.getValue().removeIf(session -> !session.isOpen());
+            if (entry.getValue().isEmpty()) {
+                pictureSessions.remove(entry.getKey());
             }
         }
     }

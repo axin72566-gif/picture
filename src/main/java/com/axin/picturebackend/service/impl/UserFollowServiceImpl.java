@@ -8,6 +8,7 @@ import com.axin.picturebackend.model.entity.UserFollow;
 import com.axin.picturebackend.service.SysNoticeService;
 import com.axin.picturebackend.service.UserFollowService;
 import com.axin.picturebackend.service.UserService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.extern.slf4j.Slf4j;
@@ -119,5 +120,14 @@ public class UserFollowServiceImpl extends ServiceImpl<UserFollowMapper, UserFol
                 .map(UserFollow::getFollowUserId)
                 .collect(Collectors.toList());
         return userService.listByIds(followUserIds);
+    }
+
+    @Override
+    public long countFollowers(Long userId) {
+        if (userId == null || userId <= 0) {
+            return 0;
+        }
+        return this.count(new LambdaQueryWrapper<UserFollow>()
+                .eq(UserFollow::getFollowUserId, userId));
     }
 }

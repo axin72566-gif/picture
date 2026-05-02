@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 
 import javax.servlet.http.HttpServletResponse;
+import java.util.List;
 
 /**
 * @author kdkt1
@@ -133,4 +134,12 @@ public interface PictureService extends IService<Picture> {
 	 * @param response  响应对象
 	 */
 	void downloadPicture(Long pictureId, User loginUser, HttpServletResponse response);
+
+	/**
+	 * 获取每日推荐图片列表
+	 *
+	 * @param loginUser 登录用户（用于填充点赞状态）
+	 * @return 推荐图片VO列表（最多30条）
+	 */
+	List<PictureVO> getDailyRecommendation(User loginUser);
 }

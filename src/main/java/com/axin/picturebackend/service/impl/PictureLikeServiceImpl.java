@@ -3,6 +3,7 @@ package com.axin.picturebackend.service.impl;
 import com.axin.picturebackend.constant.RedisConstant;
 import com.axin.picturebackend.exception.BusinessException;
 import com.axin.picturebackend.exception.ErrorCode;
+import com.axin.picturebackend.exception.ThrowUtils;
 import com.axin.picturebackend.mapper.PictureLikeMapper;
 import com.axin.picturebackend.model.entity.Picture;
 import com.axin.picturebackend.model.entity.PictureLike;
@@ -47,12 +48,8 @@ public class PictureLikeServiceImpl extends ServiceImpl<PictureLikeMapper, Pictu
 
     @Override
     public boolean doLike(Long pictureId, User loginUser) {
-        if (pictureId == null || pictureId <= 0) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "图片ID不合法");
-        }
-        if (loginUser == null) {
-            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR, "未登录");
-        }
+        ThrowUtils.throwIf(pictureId == null || pictureId <= 0, ErrorCode.PARAMS_ERROR, "图片ID不合法");
+        ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR, "未登录");
         Long userId = loginUser.getId();
 
         // 查询点赞关系是否存在

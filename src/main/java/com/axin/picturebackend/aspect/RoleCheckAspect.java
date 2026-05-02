@@ -31,13 +31,15 @@ public class RoleCheckAspect {
 		RequestAttributes requestAttributes = RequestContextHolder.currentRequestAttributes();
 		HttpServletRequest request = ((ServletRequestAttributes) requestAttributes).getRequest();
 		User loginUser = userService.getLoginUser(request);
+
+		// 功能无需权限校验
+		if (mustRole.isEmpty()) {
+			return joinPoint.proceed();
+		}
+
 		// 判断是否登录
 		if (loginUser == null) {
 			throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR, "切面拦截未登录");
-		}
-		// 功能无需权限校验，直接放行
-		if (mustRole.isEmpty()) {
-			return joinPoint.proceed();
 		}
 		// 判断权限
 		String userRole = loginUser.getUserRole();

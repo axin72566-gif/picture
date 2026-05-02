@@ -1,5 +1,6 @@
 package com.axin.picturebackend.service.impl;
 
+import com.axin.picturebackend.constant.RedisConstant;
 import com.axin.picturebackend.constant.UserConstant;
 import com.axin.picturebackend.exception.BusinessException;
 import com.axin.picturebackend.exception.ErrorCode;
@@ -24,6 +25,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
@@ -54,6 +56,9 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
     @Lazy
     @Resource
     private SysNoticeService sysNoticeService;
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
 
     // ==================== 发布评论 ====================
 
@@ -92,6 +97,9 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
         comment.setContent(content);
         boolean saved = this.save(comment);
         ThrowUtils.throwIf(!saved, ErrorCode.OPERATION_ERROR, "发布评论失败");
+
+        // 今日评论计数 +1
+        stringRedisTemplate.opsForValue().increment(RedisConstant.PICTURE_COMMENT_COUNT + pictureId, 1);
 
         // 5. 发送评论通知给图片作者（自己评论自己不通知）
         try {
@@ -136,6 +144,11 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
         updateWrapper.in(Comment::getId, toDeleteIds)
                 .set(Comment::getIsDelete, 1);
         this.update(updateWrapper);
+
+        // 今日评论计数减少（含子孙评论）
+        long deletedCount = toDeleteIds.size() + 1;
+        stringRedisTemplate.opsForValue().decrement(
+                RedisConstant.PICTURE_COMMENT_COUNT + comment.getPictureId(), deletedCount);
     }
 
     /**
@@ -248,5 +261,22 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
                 throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "您不是该空间成员，无权评论");
             }
         }
+    }
+
+    // ==================== 评论计数 ====================
+
+    @Override
+    public long getCommentCount(Long pictureId) {
+        String key = RedisConstant.PICTURE_COMMENT_COUNT + pictureId;
+        String countStr = stringRedisTemplate.opsForValue().get(key);
+        if (countStr != null) {
+            try {
+                return Long.parseLong(countStr);
+            } catch (NumberFormatException e) {
+                log.warn("评论计数格式错误, pictureId={}, value={}", pictureId, countStr);
+            }
+        }
+        return this.count(new LambdaQueryWrapper<Comment>()
+                .eq(Comment::getPictureId, pictureId));
     }
 }
