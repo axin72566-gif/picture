@@ -101,5 +101,5 @@ rocketmq:
   name-server: 192.168.60.131:9876
   producer:
     group: feed-producer-group
-    send-message-timeout: 3000
+    send-message-timeout: 5000
     retry-times-when-send-failed: 2

@@ -47,4 +47,18 @@ public class RedisConstant {
 	 * Key: user:fans:count:{userId}，value=粉丝数
 	 */
 	public static final String USER_FANS_COUNT = "user:fans:count:";
+
+	// ==================== 秒杀相关 ====================
+
+	/**
+	 * 秒杀活动剩余库存（String，value=剩余数量）
+	 * Key: seckill:stock:{activityId}
+	 */
+	public static final String SECKILL_STOCK = "seckill:stock:";
+
+	/**
+	 * 用户参与秒杀记录（String，SETNX，有效期=活动结束时间）
+	 * Key: seckill:user:{activityId}:{userId}，用于限购去重
+	 */
+	public static final String SECKILL_USER = "seckill:user:";
 }

@@ -10,6 +10,7 @@ import com.axin.picturebackend.manager.auth.SpaceUserAuthManager;
 import com.axin.picturebackend.model.Enum.SpaceLevelEnum;
 import com.axin.picturebackend.model.Enum.SpaceRoleEnum;
 import com.axin.picturebackend.model.Enum.SpaceTypeEnum;
+import com.axin.picturebackend.service.VipService;
 import com.axin.picturebackend.model.dto.space.SpaceAddRequest;
 import com.axin.picturebackend.model.dto.space.SpaceEditRequest;
 import com.axin.picturebackend.model.dto.space.SpaceQueryRequest;
@@ -56,6 +57,9 @@ public class SpaceServiceImpl extends ServiceImpl<SpaceMapper, Space>
     private SpaceUserAuthManager spaceUserAuthManager;
     @Resource
     private CosManager cosManager;
+    @Lazy
+    @Resource
+    private VipService vipService;
 
     // ====== 校验 / 填充 ======
 
@@ -139,9 +143,21 @@ public class SpaceServiceImpl extends ServiceImpl<SpaceMapper, Space>
         validSpace(newSpace, true);
         fillSpaceParam(newSpace);
         newSpace.setUserId(loginUser.getId());
-        // 非普通版空间需要管理员权限
-        if (newSpace.getSpaceLevel() != SpaceLevelEnum.COMMON.getValue() && !userService.isAdmin(loginUser)) {
-            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "用户无权限创建旗舰版空间");
+        // VIP 权益校验：专业空间（level=1）需要 VIP 或管理员；旗舰空间（level=2）仅管理员
+        if (newSpace.getSpaceLevel() != SpaceLevelEnum.COMMON.getValue()) {
+            boolean isAdmin = userService.isAdmin(loginUser);
+            if (newSpace.getSpaceLevel() == SpaceLevelEnum.PROFESSIONAL.getValue()) {
+                // 专业空间：VIP 用户或管理员均可创建
+                boolean isVip = vipService.isVip(loginUser.getId());
+                if (!isAdmin && !isVip) {
+                    throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "创建专业空间需要 VIP 会员");
+                }
+            } else {
+                // 旗舰及以上空间：仅管理员
+                if (!isAdmin) {
+                    throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权限创建旗舰版空间");
+                }
+            }
         }
         // 对用户ID加锁，防止并发创建同类型空间
         String lock = String.valueOf(loginUser.getId()).intern();
