@@ -19,6 +19,7 @@ import com.axin.picturebackend.exception.ErrorCode;
 import com.axin.picturebackend.exception.ThrowUtils;
 import com.axin.picturebackend.manager.CosManager;
 import com.axin.picturebackend.manager.auth.SpaceUserAuthManager;
+import com.axin.picturebackend.manager.feed.FeedMQMessage;
 import com.axin.picturebackend.manager.upload.FilePictureUpload;
 import com.axin.picturebackend.manager.upload.UrlPictureUpload;
 import com.axin.picturebackend.model.Enum.PictureReviewStatusEnum;
@@ -111,6 +112,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
     @Resource
     private UserFollowService userFollowService;
 
+    @Lazy
+    @Resource
+    private com.axin.picturebackend.manager.feed.FeedMQProducer feedMQProducer;
+
     @Resource
     private com.axin.picturebackend.mapper.DailyRecommendMapper dailyRecommendMapper;
 
@@ -202,6 +207,27 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
                 updateSpaceQuota(spaceId, finalResult.getPicSize());
                 return null;
             });
+            // 事务提交后，异步发送 Feed MQ 消息（try-catch 降级，不影响主流程）
+            // 仅公开图片（无空间）才推送 Feed 流
+            if (spaceId == null) {
+                try {
+                    long fansCount = userFollowService.countFollowers(loginUser.getId());
+                    FeedMQMessage mqMessage =
+                            FeedMQMessage.builder()
+                                    .pictureId(picture.getId())
+                                    .uploaderId(loginUser.getId())
+                                    .uploaderName(loginUser.getUserName() != null
+                                            ? loginUser.getUserName() : loginUser.getUserAccount())
+                                    .uploaderAvatar(loginUser.getUserAvatar())
+                                    .createTime(picture.getCreateTime().getTime())
+                                    .fansCount(fansCount)
+                                    .build();
+                    feedMQProducer.sendFeedNotify(mqMessage);
+                } catch (Exception e) {
+                    log.warn("[FeedMQ] 发送 Feed 消息失败, pictureId={}, error={}",
+                            picture.getId(), e.getMessage());
+                }
+            }
         }
         PictureVO pictureVO = PictureVO.objToVo(picture);
         pictureVO.setUser(userService.getUserVO(loginUser));

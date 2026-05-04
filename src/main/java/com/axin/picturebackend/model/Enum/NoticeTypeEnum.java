@@ -12,7 +12,9 @@ public enum NoticeTypeEnum {
     LIKE("点赞通知", "like"),
     COMMENT("评论通知", "comment"),
     SYSTEM_CLEAR("系统清理通知", "system_clear"),
-    SYSTEM("系统公告", "system");
+    SYSTEM("系统公告", "system"),
+    PICTURE_UPLOAD("图片上传通知", "picture_upload"),
+    FOLLOW("关注通知", "follow");
 
     private final String text;
     private final String value;

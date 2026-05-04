@@ -5,6 +5,7 @@ import com.axin.picturebackend.exception.BusinessException;
 import com.axin.picturebackend.exception.ErrorCode;
 import com.axin.picturebackend.exception.ThrowUtils;
 import com.axin.picturebackend.mapper.PictureLikeMapper;
+import com.axin.picturebackend.model.Enum.NoticeTypeEnum;
 import com.axin.picturebackend.model.entity.Picture;
 import com.axin.picturebackend.model.entity.PictureLike;
 import com.axin.picturebackend.model.entity.User;
@@ -98,7 +99,8 @@ public class PictureLikeServiceImpl extends ServiceImpl<PictureLikeMapper, Pictu
                     String noticeContent = String.format("用户「%s」点赞了你的图片「%s」",
                             loginUser.getUserName() == null ? loginUser.getUserAccount() : loginUser.getUserName(),
                             picture.getName() == null ? "" : picture.getName());
-                    sysNoticeService.sendNotice(picture.getUserId(), "收到新点赞", noticeContent, pictureId);
+                    sysNoticeService.sendNotice(picture.getUserId(), "收到新点赞", noticeContent, pictureId,
+                            NoticeTypeEnum.LIKE.getValue());
                 }
             } catch (Exception e) {
                 log.warn("发送点赞通知失败, pictureId={}, error={}", pictureId, e.getMessage());

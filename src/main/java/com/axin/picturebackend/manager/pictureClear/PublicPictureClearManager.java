@@ -5,6 +5,7 @@ import com.axin.picturebackend.exception.ErrorCode;
 import com.axin.picturebackend.config.CosClientConfig;
 import com.axin.picturebackend.exception.ThrowUtils;
 import com.axin.picturebackend.manager.CosManager;
+import com.axin.picturebackend.model.Enum.NoticeTypeEnum;
 import com.axin.picturebackend.model.Enum.PictureReviewStatusEnum;
 import com.axin.picturebackend.model.entity.Picture;
 import com.axin.picturebackend.service.PictureService;
@@ -207,7 +208,8 @@ public class PublicPictureClearManager {
                     picNames += " 等" + pics.size() + "张";
                 }
                 String content = String.format("你的图片「%s」因长期冷门或不符合规范，已被系统自动清理。", picNames);
-                sysNoticeService.sendNotice(userId, "系统清理通知", content, null);
+                sysNoticeService.sendNotice(userId, "系统清理通知", content, null,
+                        NoticeTypeEnum.SYSTEM_CLEAR.getValue());
             });
         } catch (Exception e) {
             log.warn("[公共图库清理] 发送清理通知失败, error={}", e.getMessage());

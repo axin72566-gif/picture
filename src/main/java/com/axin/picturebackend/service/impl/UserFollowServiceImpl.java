@@ -1,8 +1,10 @@
 package com.axin.picturebackend.service.impl;
 
+import com.axin.picturebackend.constant.RedisConstant;
 import com.axin.picturebackend.exception.BusinessException;
 import com.axin.picturebackend.exception.ErrorCode;
 import com.axin.picturebackend.mapper.UserFollowMapper;
+import com.axin.picturebackend.model.Enum.NoticeTypeEnum;
 import com.axin.picturebackend.model.entity.User;
 import com.axin.picturebackend.model.entity.UserFollow;
 import com.axin.picturebackend.service.SysNoticeService;
@@ -13,12 +15,14 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -36,6 +40,12 @@ public class UserFollowServiceImpl extends ServiceImpl<UserFollowMapper, UserFol
     @Lazy
     @Resource
     private SysNoticeService sysNoticeService;
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    /** 粉丝数缓存 TTL：10 分钟 */
+    private static final long FANS_COUNT_CACHE_TTL_MINUTES = 10L;
 
     @Override
     public boolean doFollow(Long followUserId, User loginUser) {
@@ -70,6 +80,19 @@ public class UserFollowServiceImpl extends ServiceImpl<UserFollowMapper, UserFol
             if (!removed) {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "取消关注失败");
             }
+            // 维护粉丝数缓存：自减
+            try {
+                String cacheKey = RedisConstant.USER_FANS_COUNT + followUserId;
+                String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+                if (cached != null) {
+                    long count = Long.parseLong(cached);
+                    long newCount = Math.max(0, count - 1);
+                    stringRedisTemplate.opsForValue().set(cacheKey,
+                            String.valueOf(newCount), FANS_COUNT_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
+                }
+            } catch (Exception e) {
+                log.warn("更新粉丝数缓存失败(取消关注), followUserId={}, error={}", followUserId, e.getMessage());
+            }
             return false;
         } else {
             // 未关注 → 关注
@@ -81,12 +104,29 @@ public class UserFollowServiceImpl extends ServiceImpl<UserFollowMapper, UserFol
             if (!saved) {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "关注失败");
             }
+            // 维护粉丝数缓存：自增（若缓存不存在则查库后写入）
+            try {
+                String cacheKey = RedisConstant.USER_FANS_COUNT + followUserId;
+                String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+                long newCount;
+                if (cached != null) {
+                    newCount = Long.parseLong(cached) + 1;
+                } else {
+                    // 缓存缺失，查库并写入
+                    newCount = this.count(new QueryWrapper<UserFollow>().eq("followUserId", followUserId));
+                }
+                stringRedisTemplate.opsForValue().set(cacheKey,
+                        String.valueOf(newCount), FANS_COUNT_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
+            } catch (Exception e) {
+                log.warn("更新粉丝数缓存失败(关注), followUserId={}, error={}", followUserId, e.getMessage());
+            }
 
             // 发送关注通知
             try {
                 String noticeContent = String.format("用户「%s」关注了你",
                         loginUser.getUserName() == null ? loginUser.getUserAccount() : loginUser.getUserName());
-                sysNoticeService.sendNotice(followUserId, "收到新关注", noticeContent, userId);
+                sysNoticeService.sendNotice(followUserId, "收到新关注", noticeContent, userId,
+                        NoticeTypeEnum.FOLLOW.getValue());
             } catch (Exception e) {
                 log.warn("发送关注通知失败, followUserId={}, error={}", followUserId, e.getMessage());
             }

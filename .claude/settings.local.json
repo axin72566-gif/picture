@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(mvn compile *)"
+      "Bash(mvn compile *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git check-ignore *)",
+      "Bash(git worktree *)",
+      "Bash(git branch *)"
     ]
   }
 }

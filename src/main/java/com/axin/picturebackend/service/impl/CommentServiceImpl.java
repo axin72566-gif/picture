@@ -8,6 +8,7 @@ import com.axin.picturebackend.exception.ThrowUtils;
 import com.axin.picturebackend.mapper.CommentMapper;
 import com.axin.picturebackend.model.dto.comment.CommentAddRequest;
 import com.axin.picturebackend.model.dto.comment.CommentQueryRequest;
+import com.axin.picturebackend.model.Enum.NoticeTypeEnum;
 import com.axin.picturebackend.model.entity.Comment;
 import com.axin.picturebackend.model.entity.Picture;
 import com.axin.picturebackend.model.entity.SpaceUser;
@@ -109,7 +110,8 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
                 String noticeContent = String.format("用户「%s」评论了你的图片「%s」：%s",
                         commenterName, pictureName,
                         content.length() > 50 ? content.substring(0, 50) + "..." : content);
-                sysNoticeService.sendNotice(picture.getUserId(), "收到新评论", noticeContent, pictureId);
+                sysNoticeService.sendNotice(picture.getUserId(), "收到新评论", noticeContent, pictureId,
+                        NoticeTypeEnum.COMMENT.getValue());
             }
         } catch (Exception e) {
             log.warn("发送评论通知失败, pictureId={}, error={}", pictureId, e.getMessage());

@@ -40,6 +40,11 @@ public class SysNotice {
     private Long relatedId;
 
     /**
+     * 通知类型（对应 NoticeTypeEnum.value）：like/comment/system/system_clear/picture_upload
+     */
+    private String type;
+
+    /**
      * 阅读状态：0-未读 1-已读
      */
     private Integer isRead;

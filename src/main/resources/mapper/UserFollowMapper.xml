@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.axin.picturebackend.mapper.UserFollowMapper">
+
+    <resultMap id="BaseResultMap" type="com.axin.picturebackend.model.entity.UserFollow">
+        <id property="id" column="id"/>
+        <result property="userId" column="userId"/>
+        <result property="followUserId" column="followUserId"/>
+        <result property="createTime" column="createTime"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, userId, followUserId, createTime
+    </sql>
+
+    <!--
+        查询指定被关注用户的全量粉丝ID列表
+        user_follow 表中：userId = 粉丝（发起关注者），followUserId = 被关注者
+    -->
+    <select id="selectFansIdList" resultType="java.lang.Long">
+        SELECT userId
+        FROM user_follow
+        WHERE followUserId = #{followUserId}
+    </select>
+
+</mapper>

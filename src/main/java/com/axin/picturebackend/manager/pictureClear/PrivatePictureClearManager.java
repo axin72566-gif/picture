@@ -3,6 +3,7 @@ package com.axin.picturebackend.manager.pictureClear;
 import com.axin.picturebackend.config.CosClientConfig;
 import com.axin.picturebackend.constant.PictureConstant;
 import com.axin.picturebackend.manager.CosManager;
+import com.axin.picturebackend.model.Enum.NoticeTypeEnum;
 import com.axin.picturebackend.model.Enum.SpaceTypeEnum;
 import com.axin.picturebackend.model.entity.Picture;
 import com.axin.picturebackend.model.entity.Space;
@@ -299,7 +300,8 @@ public class PrivatePictureClearManager {
             }
             String content = String.format(template, pics.size())
                     + "（涉及图片：" + picNames + "）";
-            sysNoticeService.sendNotice(space.getUserId(), "系统清理通知", content, null);
+            sysNoticeService.sendNotice(space.getUserId(), "系统清理通知", content, null,
+                    NoticeTypeEnum.SYSTEM_CLEAR.getValue());
         } catch (Exception e) {
             log.warn("[私有空间清理] 发送清理通知失败，spaceId={}, error={}", space.getId(), e.getMessage());
         }

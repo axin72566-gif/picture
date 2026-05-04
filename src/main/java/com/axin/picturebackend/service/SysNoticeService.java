@@ -23,7 +23,7 @@ public interface SysNoticeService extends IService<SysNotice> {
      * @param content   通知内容
      * @param relatedId 关联业务ID（图片ID/评论ID等，无则传 null）
      */
-    void sendNotice(Long toUserId, String title, String content, Long relatedId);
+    void sendNotice(Long toUserId, String title, String content, Long relatedId, String type);
 
     /**
      * 批量发送通知（同一内容发给多个用户，用于系统批量清理场景）
@@ -33,7 +33,7 @@ public interface SysNoticeService extends IService<SysNotice> {
      * @param content   通知内容
      * @param relatedId 关联业务ID
      */
-    void sendBatchNotice(List<Long> toUserIds, String title, String content, Long relatedId);
+    void sendBatchNotice(List<Long> toUserIds, String title, String content, Long relatedId, String type);
 
     /**
      * 分页查询当前用户的通知列表（含广播 userId=0 的通知）

@@ -2,6 +2,7 @@ package com.axin.picturebackend.manager.pictureClear;
 
 import com.axin.picturebackend.manager.CosManager;
 import com.axin.picturebackend.config.CosClientConfig;
+import com.axin.picturebackend.model.Enum.NoticeTypeEnum;
 import com.axin.picturebackend.model.Enum.PictureReviewStatusEnum;
 import com.axin.picturebackend.model.Enum.SpaceTypeEnum;
 import com.axin.picturebackend.model.entity.Picture;
@@ -292,7 +293,8 @@ public class TeamPictureClearManager {
             if (!memberIds.contains(space.getUserId())) {
                 memberIds.add(space.getUserId());
             }
-            sysNoticeService.sendBatchNotice(memberIds, title, content, null);
+            sysNoticeService.sendBatchNotice(memberIds, title, content, null,
+                    NoticeTypeEnum.SYSTEM_CLEAR.getValue());
         } catch (Exception e) {
             log.warn("[团队空间清理] 发送通知失败, spaceId={}, error={}", space.getId(), e.getMessage());
         }

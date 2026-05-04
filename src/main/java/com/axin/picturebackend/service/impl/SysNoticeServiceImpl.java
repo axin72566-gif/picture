@@ -36,7 +36,7 @@ public class SysNoticeServiceImpl extends ServiceImpl<SysNoticeMapper, SysNotice
     // ==================== 发送通知 ====================
 
     @Override
-    public void sendNotice(Long toUserId, String title, String content, Long relatedId) {
+    public void sendNotice(Long toUserId, String title, String content, Long relatedId, String type) {
         if (toUserId == null || !StringUtils.hasText(content)) {
             log.warn("发送通知参数不合法, toUserId={}, content={}", toUserId, content);
             return;
@@ -47,6 +47,7 @@ public class SysNoticeServiceImpl extends ServiceImpl<SysNoticeMapper, SysNotice
             notice.setTitle(title);
             notice.setContent(content);
             notice.setRelatedId(relatedId);
+            notice.setType(type);
             notice.setIsRead(0);
             notice.setIsDeleted(0);
             this.save(notice);
@@ -56,7 +57,7 @@ public class SysNoticeServiceImpl extends ServiceImpl<SysNoticeMapper, SysNotice
     }
 
     @Override
-    public void sendBatchNotice(List<Long> toUserIds, String title, String content, Long relatedId) {
+    public void sendBatchNotice(List<Long> toUserIds, String title, String content, Long relatedId, String type) {
         if (CollectionUtils.isEmpty(toUserIds) || !StringUtils.hasText(content)) {
             log.warn("批量发送通知参数不合法");
             return;
@@ -68,6 +69,7 @@ public class SysNoticeServiceImpl extends ServiceImpl<SysNoticeMapper, SysNotice
                 notice.setTitle(title);
                 notice.setContent(content);
                 notice.setRelatedId(relatedId);
+                notice.setType(type);
                 notice.setIsRead(0);
                 notice.setIsDeleted(0);
                 return notice;
